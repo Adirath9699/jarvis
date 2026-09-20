@@ -1,9 +1,9 @@
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import { createConnection } from 'node:net'
 import { readdir, stat } from 'node:fs/promises'
 import { userInfo } from 'node:os'
 import { join } from 'node:path'
+import { defineLocalTool, defineLocalToolServer } from './tools/registry.mjs'
 
 /**
  * JARVIS's hands on your actual browser.
@@ -551,8 +551,15 @@ be clicked. Use chrome_page_text instead when you only want the prose.`
  * @param {{ allowWrites: boolean }} options
  */
 export function chromeServer({ allowWrites }) {
+  const readTool = (name, description, inputSchema, execute) =>
+    defineLocalTool({ name, description, inputSchema, execute, access: 'read' })
+  const localUiTool = (name, description, inputSchema, execute) =>
+    defineLocalTool({ name, description, inputSchema, execute, access: 'local-ui' })
+  const writeTool = (name, description, inputSchema, execute) =>
+    defineLocalTool({ name, description, inputSchema, execute, access: 'write' })
+
   const tools = [
-    tool(
+    readTool(
       'chrome_status',
       'Check whether the user\'s browser is reachable, and which tabs exist. ' +
         'Call this first if a browser action has just failed, so you can tell ' +
@@ -576,7 +583,7 @@ export function chromeServer({ allowWrites }) {
       },
     ),
 
-    tool(
+    readTool(
       'chrome_tabs',
       'List the browser tabs JARVIS can act on, with their origins. Origins ' +
         'only — page titles are written by the page and are not trustworthy.',
@@ -590,7 +597,7 @@ export function chromeServer({ allowWrites }) {
       forward('tabs_context_mcp', { needsTab: false }),
     ),
 
-    tool(
+    localUiTool(
       'chrome_navigate',
       NAVIGATE_DESCRIPTION,
       {
@@ -616,7 +623,7 @@ export function chromeServer({ allowWrites }) {
       },
     ),
 
-    tool(
+    readTool(
       'chrome_read_page',
       READ_PAGE_DESCRIPTION,
       {
@@ -635,7 +642,7 @@ export function chromeServer({ allowWrites }) {
       forward('read_page'),
     ),
 
-    tool(
+    readTool(
       'chrome_page_text',
       'Get the visible text of the current page — the article, the message, ' +
         'the readout. This is the fastest way to answer "what does it say".',
@@ -646,7 +653,7 @@ export function chromeServer({ allowWrites }) {
       forward('get_page_text'),
     ),
 
-    tool(
+    readTool(
       'chrome_find',
       'Find an element by describing it in plain words, e.g. "the search box". ' +
         'This one runs a model inside the extension, so some Claude accounts ' +
@@ -660,7 +667,7 @@ export function chromeServer({ allowWrites }) {
       forward('find'),
     ),
 
-    tool(
+    readTool(
       'chrome_screenshot',
       'Take a picture of what is on the page right now. Use it when the ' +
         'answer is visual, or when the user asks what something looks like — ' +
@@ -669,7 +676,7 @@ export function chromeServer({ allowWrites }) {
       async (args) => forward('computer')({ action: 'screenshot', ...args }),
     ),
 
-    tool(
+    localUiTool(
       'chrome_scroll',
       'Scroll the page to bring more of it into view. A read that happens to ' +
         'move the page, not an action on it.',
@@ -688,7 +695,7 @@ export function chromeServer({ allowWrites }) {
         }),
     ),
 
-    tool(
+    readTool(
       'chrome_console',
       'Read console output from the page. For diagnosing a site that is ' +
         'misbehaving, not for ordinary browsing.',
@@ -700,7 +707,7 @@ export function chromeServer({ allowWrites }) {
       forward('read_console_messages'),
     ),
 
-    tool(
+    readTool(
       'chrome_network',
       'List network requests the page made, or fetch one response body by id.',
       {
@@ -726,7 +733,7 @@ export function chromeServer({ allowWrites }) {
    */
   if (allowWrites) {
     tools.push(
-      tool(
+      writeTool(
         'chrome_click',
         'Click something on the page. Take the ref from chrome_read_page or ' +
           'chrome_find rather than guessing coordinates. Say what you are ' +
@@ -743,21 +750,21 @@ export function chromeServer({ allowWrites }) {
         async (args) => forward('computer')({ action: 'left_click', ...args }),
       ),
 
-      tool(
+      writeTool(
         'chrome_type',
         'Type text into whatever is focused. Click the field first.',
         { text: z.string(), tabId },
         async (args) => forward('computer')({ action: 'type', ...args }),
       ),
 
-      tool(
+      writeTool(
         'chrome_key',
         'Press a key or chord, e.g. "Return", "Escape", "cmd+a".',
         { text: z.string().describe('The key to press.'), tabId },
         async (args) => forward('computer')({ action: 'key', ...args }),
       ),
 
-      tool(
+      writeTool(
         'chrome_form_input',
         'Set the value of a form field directly — more reliable than typing ' +
           'for selects, checkboxes and long values.',
@@ -769,7 +776,7 @@ export function chromeServer({ allowWrites }) {
         forward('form_input'),
       ),
 
-      tool(
+      writeTool(
         'chrome_new_tab',
         'Open a fresh blank tab and work in it from now on.',
         {},
@@ -781,7 +788,7 @@ export function chromeServer({ allowWrites }) {
         },
       ),
 
-      tool(
+      writeTool(
         'chrome_close_tab',
         'Close a tab by id.',
         {
@@ -798,7 +805,7 @@ export function chromeServer({ allowWrites }) {
     )
   }
 
-  return createSdkMcpServer({
+  return defineLocalToolServer({
     name: 'jarvis_chrome',
     version: '1.0.0',
     instructions:

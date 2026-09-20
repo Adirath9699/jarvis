@@ -1190,14 +1190,11 @@ wss.on('connection', (socket) => {
       // connection rather than once.
       mcpServers: {
         ...MCP_SERVERS,
-        // The user's own Chrome, over the extension's native-host socket. It
-        // holds no per-connection state, but it is built here with the rest so
-        // the write gate is read once, at the same point as everything else.
-        jarvis_chrome: chromeServer({ allowWrites: ALLOW_WRITES }),
       },
-      // The display, interface controls, and camera use provider-neutral
-      // descriptors. Claude turns them back into the same in-process SDK MCP
-      // servers at its boundary. Their handlers still close over this socket.
+      // JARVIS's local capabilities use provider-neutral descriptors. Claude
+      // turns them back into the same in-process SDK MCP servers at its
+      // boundary. They are built per connection so callbacks and the write
+      // gate are captured at the same point as before.
       localToolServers: [
         displayServer(
           (panel) => send({ type: 'panel', panel }),
@@ -1206,6 +1203,8 @@ wss.on('connection', (socket) => {
         uiServer((op, args) => send({ type: 'ui', op, args })),
         // The camera, which unlike everything else here has to ask and wait.
         visionServer(ask),
+        // The user's own Chrome, over the extension's native-host socket.
+        chromeServer({ allowWrites: ALLOW_WRITES }),
       ],
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
