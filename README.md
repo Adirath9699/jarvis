@@ -98,19 +98,28 @@ the brain and the hands.
 ```
 
 Everything you see and hear happens in the browser. The bridge is a single Node
-process (`bridge/server.mjs`) that runs the **Claude Agent SDK**
-(`@anthropic-ai/claude-agent-sdk`) — this spawns the real `claude` CLI as a child
-process, so **the brain literally is Claude Code, headless.** They talk over a
-WebSocket (plus a few HTTP endpoints) on `ws://localhost:8787`.
+process (`bridge/server.mjs`) with provider adapters for Claude and Groq. Claude
+uses the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`) and spawns the
+real `claude` CLI as a child process. Groq uses its OpenAI-compatible Chat
+Completions endpoint through Node's native `fetch`. Both expose the same small
+event contract to the WebSocket server.
 
 **Why a bridge at all?** A browser tab cannot spawn the local stdio MCP servers —
 `higgsfield`, `elevenlabs`, `android`, `playwright`, `exa`, `serper`, and the
 rest. The bridge can. And because it is the Agent SDK, it authenticates off your
 existing Claude Code login: no API key, billed to that same Claude account.
 
-**The model.** `claude-opus-5` at effort `medium` by default. Override with the
-`JARVIS_MODEL` and `JARVIS_EFFORT` environment variables. On startup the bridge
-prints its choice, e.g. `[jarvis] model claude-opus-5 · effort medium`.
+**The model.** Claude remains the default, using `claude-opus-5`; override it
+with `JARVIS_MODEL` and `JARVIS_EFFORT`. Set `JARVIS_PROVIDER=groq` and
+`GROQ_API_KEY` to use Groq; its default model is `openai/gpt-oss-20b`, overridable
+with `GROQ_MODEL`.
+Groq accepts `JARVIS_EFFORT` values `low`, `medium`, or `high`; other values are
+rejected during session setup instead of being silently ignored.
+
+The first Groq adapter deliberately exposes only JARVIS's in-process local
+tools. External MCP servers remain Claude-only. Groq tool results must currently
+be text-only; an image or other multimodal result stops the turn with a clear
+unsupported-capability error instead of converting or dropping the content.
 
 ### The voice pipeline
 
@@ -225,8 +234,11 @@ Everything is optional in bridge mode. Frontend settings live in `.env.local`
 | Variable | Default | Effect |
 |---|---|---|
 | `JARVIS_BRIDGE_PORT` | `8787` | Port for the WebSocket + HTTP endpoints |
+| `JARVIS_PROVIDER` | `claude` | Agent provider: `claude` or `groq` |
 | `JARVIS_MODEL` | `claude-opus-5` | Model to run |
 | `JARVIS_EFFORT` | `medium` | Reasoning effort |
+| `GROQ_API_KEY` | — | Required only for the Groq provider; stays in the bridge |
+| `GROQ_MODEL` | `openai/gpt-oss-20b` | Groq Chat Completions model |
 | `JARVIS_ALLOW_WRITES` | off | `1` allows effectful tools (see below) |
 | `JARVIS_ALLOWED_ORIGINS` | local dev | Extra WebSocket origins to accept |
 | `JARVIS_ALLOW_NO_ORIGIN` | off | Accept connections with no `Origin` header |

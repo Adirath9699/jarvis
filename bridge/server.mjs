@@ -98,7 +98,7 @@ function originAllowed(origin) {
  */
 const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
 
-/** The agent provider selected for the bridge. Only Claude exists for now. */
+/** The agent provider selected for the bridge. */
 const PROVIDER = process.env.JARVIS_PROVIDER?.trim().toLowerCase() || 'claude'
 
 /**
@@ -106,6 +106,8 @@ const PROVIDER = process.env.JARVIS_PROVIDER?.trim().toLowerCase() || 'claude'
  * — claude-sonnet-5 is noticeably snappier on camera if Opus feels slow.
  */
 const MODEL = process.env.JARVIS_MODEL ?? 'claude-opus-5'
+const GROQ_MODEL = process.env.GROQ_MODEL ?? 'openai/gpt-oss-20b'
+const AGENT_MODEL = PROVIDER === 'groq' ? GROQ_MODEL : MODEL
 
 /**
  * How hard the model thinks before answering.
@@ -1007,7 +1009,9 @@ console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
 console.log(
   `[jarvis] speech ${elevenKey() ? 'via ElevenLabs (key from MCP config)' : 'using browser fallback voice'}`,
 )
-console.log(`[jarvis] provider ${PROVIDER} · model ${MODEL} · effort ${EFFORT}`)
+console.log(
+  `[jarvis] provider ${PROVIDER} · model ${AGENT_MODEL} · effort ${EFFORT}`,
+)
 console.log(
   `[jarvis] writes ${ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
     (ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_WRITES=1 to permit shell/file/device actions'),
@@ -1238,7 +1242,10 @@ wss.on('connection', (socket) => {
       // Normally your own `/model` preference would decide, but that lives in
       // the settings files `settingSources: []` deliberately stops loading, so
       // without this line nothing in the project has a say at all.
-      model: MODEL,
+      model: AGENT_MODEL,
+      // Groq has its own model namespace and credential. The adapter ignores
+      // these fields on Claude, keeping the established Claude path unchanged.
+      apiKey: process.env.GROQ_API_KEY,
       effort: EFFORT,
       maxTurns: 24,
       permissionMode: 'default',

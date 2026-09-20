@@ -1,6 +1,10 @@
 import { createClaudeAgentSession } from './claude-agent.mjs'
+import { createGroqAgentSession } from './groq-agent.mjs'
 
-const PROVIDERS = new Map([['claude', createClaudeAgentSession]])
+const PROVIDERS = new Map([
+  ['claude', createClaudeAgentSession],
+  ['groq', createGroqAgentSession],
+])
 
 /**
  * Provider-neutral session factory. Every adapter yields the small JARVIS event
