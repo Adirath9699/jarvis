@@ -1190,10 +1190,6 @@ wss.on('connection', (socket) => {
       // connection rather than once.
       mcpServers: {
         ...MCP_SERVERS,
-        jarvis: displayServer(
-          (panel) => send({ type: 'panel', panel }),
-          (blade) => send({ type: 'blade', blade }),
-        ),
         // The user's own Chrome, over the extension's native-host socket. It
         // holds no per-connection state, but it is built here with the rest so
         // the write gate is read once, at the same point as everything else.
@@ -1201,9 +1197,14 @@ wss.on('connection', (socket) => {
         // The camera, which unlike everything else here has to ask and wait.
         jarvis_eyes: visionServer(ask),
       },
-      // The interface controls use a provider-neutral descriptor. Claude turns
-      // it back into the same in-process SDK MCP server at its boundary.
+      // The display and interface controls use provider-neutral descriptors.
+      // Claude turns them back into the same in-process SDK MCP servers at its
+      // boundary. Their handlers still close over this socket.
       localToolServers: [
+        displayServer(
+          (panel) => send({ type: 'panel', panel }),
+          (blade) => send({ type: 'blade', blade }),
+        ),
         uiServer((op, args) => send({ type: 'ui', op, args })),
       ],
       // A plain system prompt, not the claude_code preset. The preset is
