@@ -1030,18 +1030,6 @@ console.log(
     (ALLOW_NO_ORIGIN ? ' and clients that send no origin' : ''),
 )
 
-/**
- * What to tell the browser when a turn ends badly. Plain sentences, because
- * whatever reaches the client is liable to be spoken.
- */
-const RESULT_FAILURES = {
-  error_during_execution: 'The turn failed part way through.',
-  error_max_turns: 'The turn ran too long and was stopped.',
-  error_max_budget_usd: 'The budget for this turn ran out.',
-  error_max_structured_output_retries: 'The answer could not be assembled.',
-  default: 'The turn ended without an answer.',
-}
-
 wss.on('connection', (socket) => {
   console.log('[jarvis] client connected')
 
@@ -1126,7 +1114,7 @@ wss.on('connection', (socket) => {
    * a bug on camera.
    *
    * The SDK's order is: the block starts streaming, then canUseTool is asked,
-   * then the tool runs. So nothing is known at content_block_start. Announcing
+   * then the tool runs. So nothing is known at the tool-start event. Announcing
    * from inside canUseTool would know the verdict but miss tools entirely —
    * measured on this SDK, the callback is consulted only for calls the CLI
    * hasn't already settled, so a `Bash: echo` its own classifier waves through
@@ -1150,10 +1138,10 @@ wss.on('connection', (socket) => {
    * listener. Measured: ask for ALPHA, interrupt, ask for BRAVO, and BRAVO's
    * answer arrives as "ALPHA\nBRAVO".
    *
-   * The SDK emits exactly one `result` per turn, so that is the boundary worth
-   * waiting for. Raced against a timeout because a turn that never reports one
-   * must not wedge the conversation for ever — a stray word is a blemish, a
-   * deadlocked assistant is not.
+   * The provider stream emits exactly one completion or error per turn, so
+   * that is the boundary worth waiting for. Raced against a timeout because a
+   * turn that never reports one must not wedge the conversation for ever — a
+   * stray word is a blemish, a deadlocked assistant is not.
    */
   let settling = Promise.resolve()
   let finishTurn = null
@@ -1286,80 +1274,36 @@ wss.on('connection', (socket) => {
     try {
       for await (const msg of session) {
         if (process.env.JARVIS_DEBUG === '1') {
-          console.log('[msg]', msg.type, msg.event?.type ?? '')
+          console.log('[event]', msg.type)
         }
 
         switch (msg.type) {
-          // Raw Anthropic stream events, surfaced by includePartialMessages.
-          // This is the ONLY place spoken text arrives: there is no top-level
-          // text_delta message in the SDK union and the 'assistant' message
-          // carries no deltas either. Turn includePartialMessages off and
-          // JARVIS goes completely mute.
-          case 'stream_event': {
-            const ev = msg.event
-            if (
-              ev?.type === 'content_block_delta' &&
-              ev.delta?.type === 'text_delta' &&
-              ev.delta.text
-            ) {
-              sendTurn({ type: 'text', delta: ev.delta.text })
-            }
-            if (
-              ev?.type === 'content_block_start' &&
-              ev.content_block?.type === 'tool_use'
-            ) {
-              announceTool(ev.content_block.id, ev.content_block.name)
-            }
+          case 'text_delta':
+            sendTurn({ type: 'text', delta: msg.text })
             break
-          }
 
-          case 'assistant': {
-            // Fallback for builds that emit whole assistant messages rather
-            // than partial events. Deduped against the stream_event path.
-            for (const block of msg.content ?? msg.message?.content ?? []) {
-              if (block.type === 'tool_use') {
-                announceTool(block.id, block.name)
-              }
-            }
+          case 'tool_start':
+            announceTool(msg.id, msg.name)
             break
-          }
 
-          case 'user': {
-            // Tool results come back as a user message. This is the only place
-            // a held announcement can be resolved: a refused tool arrives with
-            // is_error set and stays off the HUD, anything else ran.
-            const blocks = msg.message?.content
-            if (!Array.isArray(blocks)) break
-            for (const block of blocks) {
-              if (block?.type === 'tool_result') {
-                settleTool(block.tool_use_id, block.is_error === true)
-              }
-            }
+          case 'tool_result':
+            settleTool(msg.id, msg.failed)
             break
-          }
 
-          case 'result':
-            // A result is not automatically a success. The error subtypes
-            // carry no `result` field at all, so reporting them as 'done' with
-            // empty text is indistinguishable from a turn that simply had
-            // nothing to say — the HUD stops spinning and JARVIS stands there
-            // silent. Say what happened instead.
-            if (msg.subtype === 'success') {
-              sendTurn({
-                type: 'done',
-                text: msg.result ?? '',
-                costUsd: msg.total_cost_usd ?? null,
-              })
-            } else {
-              console.error(
-                `[jarvis] turn failed: ${msg.subtype}`,
-                msg.errors ?? '',
-              )
-              sendTurn({
-                type: 'error',
-                message: RESULT_FAILURES[msg.subtype] ?? RESULT_FAILURES.default,
-              })
-            }
+          case 'turn_complete':
+            sendTurn({ type: 'done', text: msg.text, costUsd: msg.costUsd })
+            finishTurn?.()
+            finishTurn = null
+            seenTools.clear()
+            heldTools.clear()
+            break
+
+          case 'turn_error':
+            console.error(
+              `[jarvis] turn failed: ${msg.code ?? 'unknown'}`,
+              msg.details ?? '',
+            )
+            sendTurn({ type: 'error', message: msg.message })
             // Whatever was waiting on this turn to finish can go now. This is
             // the only place a turn is genuinely over.
             finishTurn?.()
@@ -1370,16 +1314,9 @@ wss.on('connection', (socket) => {
             heldTools.clear()
             break
 
-          case 'system':
-            if (msg.subtype === 'init') {
-              // Servers report 'pending' until first use — they connect
-              // lazily — so only drop the ones that are actually unusable.
-              const usable = (msg.mcp_servers ?? [])
-                .filter((s) => s.status !== 'needs-auth' && s.status !== 'failed')
-                .map((s) => s.name)
-              send({ type: 'ready', servers: usable })
-              console.log(`[jarvis] ${usable.length} MCP servers available`)
-            }
+          case 'ready':
+            send({ type: 'ready', servers: msg.servers })
+            console.log(`[jarvis] ${msg.servers.length} MCP servers available`)
             break
         }
       }
