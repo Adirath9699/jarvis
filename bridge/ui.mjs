@@ -1,5 +1,5 @@
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { defineLocalTool, defineLocalToolServer } from './tools/registry.mjs'
 
 /**
  * The `ui_*` tools — JARVIS's control of his own face.
@@ -331,11 +331,14 @@ let seq = 0
 
 const GOLDEN_ANGLE = 137.507764
 
+const uiTool = (name, description, inputSchema, execute) =>
+  defineLocalTool({ name, description, inputSchema, execute, access: 'local-ui' })
+
 /**
  * @param {(op: string, args: object) => void} emit - pushes one ui message
  */
 export function uiServer(emit) {
-  return createSdkMcpServer({
+  return defineLocalToolServer({
     name: 'jarvis_ui',
     version: '1.0.0',
     instructions:
@@ -346,7 +349,7 @@ export function uiServer(emit) {
     // occur to the model that the interface is something it can touch.
     alwaysLoad: true,
     tools: [
-      tool('ui_theme', THEME_DESCRIPTION, themeSchema, async (args) => {
+      uiTool('ui_theme', THEME_DESCRIPTION, themeSchema, async (args) => {
         const patch = {}
         put(patch, 'accent', toColour(args.accent))
         put(patch, 'background', toColour(args.background))
@@ -365,7 +368,7 @@ export function uiServer(emit) {
         return ok('Interface retinted.')
       }),
 
-      tool('ui_reactor', REACTOR_DESCRIPTION, reactorSchema, async (args) => {
+      uiTool('ui_reactor', REACTOR_DESCRIPTION, reactorSchema, async (args) => {
         const reactor = {}
         put(reactor, 'color', toColour(args.color))
         put(reactor, 'scale', clamp(args.scale, 0.2, 3))
@@ -379,7 +382,7 @@ export function uiServer(emit) {
         return ok('Reactor adjusted.')
       }),
 
-      tool('ui_orbit', ORBIT_DESCRIPTION, orbitSchema, async (args) => {
+      uiTool('ui_orbit', ORBIT_DESCRIPTION, orbitSchema, async (args) => {
         const action = args.action ?? 'add'
 
         if (action === 'clear') {
@@ -438,7 +441,7 @@ export function uiServer(emit) {
         return ok(`In orbit as "${object.id}".`)
       }),
 
-      tool('ui_chrome', CHROME_DESCRIPTION, chromeSchema, async (args) => {
+      uiTool('ui_chrome', CHROME_DESCRIPTION, chromeSchema, async (args) => {
         const chrome = {}
         put(chrome, 'systems', toBool(args.systems))
         put(chrome, 'transcript', toBool(args.transcript))
@@ -453,7 +456,7 @@ export function uiServer(emit) {
         return ok('Chrome updated.')
       }),
 
-      tool(
+      uiTool(
         'ui_effect',
         EFFECT_DESCRIPTION,
         {
@@ -468,7 +471,7 @@ export function uiServer(emit) {
         },
       ),
 
-      tool(
+      uiTool(
         'ui_screen',
         SCREEN_DESCRIPTION,
         {
@@ -485,7 +488,7 @@ export function uiServer(emit) {
         },
       ),
 
-      tool('ui_reset', RESET_DESCRIPTION, {}, async () => {
+      uiTool('ui_reset', RESET_DESCRIPTION, {}, async () => {
         emit('reset', {})
         return ok('Interface restored.')
       }),
