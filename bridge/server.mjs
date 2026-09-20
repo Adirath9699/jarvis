@@ -16,7 +16,7 @@
  */
 
 import { WebSocketServer } from 'ws'
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { createClaudeAgentSession } from './agent/claude-agent.mjs'
 import { displayServer } from './panels.mjs'
 import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
@@ -1190,9 +1190,10 @@ wss.on('connection', (socket) => {
     if (!failed) sendTurn({ type: 'tool', name })
   }
 
-  const session = query({
+  // Claude remains the only provider. This is the first boundary for choosing
+  // other providers in a later, explicitly scoped multi-provider refactor.
+  const session = createClaudeAgentSession({
     prompt: userMessages(),
-    options: {
       // Everything Claude Code has configured, plus the HUD as an in-process
       // server. The HUD's handler closes over this socket, so a `display` call
       // lands on screen directly — which is also why this object is built per
@@ -1276,7 +1277,6 @@ wss.on('connection', (socket) => {
                 ' unavailable until they enable write access on the machine.',
             }
       },
-    },
   })
 
   // Pump the session's output stream to the browser for as long as it lives.
