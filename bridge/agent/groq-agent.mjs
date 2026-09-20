@@ -5,6 +5,67 @@ const GROQ_CHAT_COMPLETIONS_URL =
   'https://api.groq.com/openai/v1/chat/completions'
 const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-20b'
 const DEFAULT_MAX_TOOL_ROUNDS = 24
+const TOOL_LOADER_NAME = 'jarvis_load_tools'
+const MAX_LOADED_TOOL_BYTES = 22_000
+const RATE_LIMIT_HEADERS = Object.freeze([
+  'retry-after',
+  'x-ratelimit-limit-tokens',
+  'x-ratelimit-remaining-tokens',
+  'x-ratelimit-reset-tokens',
+  'x-ratelimit-limit-requests',
+  'x-ratelimit-remaining-requests',
+  'x-ratelimit-reset-requests',
+])
+
+const CAPABILITY_SERVERS = Object.freeze({
+  display: 'jarvis',
+  ui: 'jarvis_ui',
+  vision: 'jarvis_eyes',
+  chrome: 'jarvis_chrome',
+})
+
+const TOOL_LOADER = {
+  type: 'function',
+  function: {
+    name: TOOL_LOADER_NAME,
+    description:
+      'Load only the JARVIS capability needed for this turn: display shows panels/blades, ui changes the HUD, vision uses the camera, and chrome controls the user browser.',
+    parameters: {
+      type: 'object',
+      properties: {
+        groups: {
+          type: 'array',
+          items: { type: 'string', enum: Object.keys(CAPABILITY_SERVERS) },
+          minItems: 1,
+          uniqueItems: true,
+          description: 'Capability groups needed to complete the current turn.',
+        },
+      },
+      required: ['groups'],
+      additionalProperties: false,
+    },
+  },
+}
+
+const byteLength = (value) => Buffer.byteLength(JSON.stringify(value), 'utf8')
+
+function badRequestDetails(payload) {
+  const upstream = payload?.error
+  if (!upstream || typeof upstream !== 'object' || Array.isArray(upstream)) return null
+  const details = {}
+  for (const field of ['type', 'code', 'message']) {
+    if (typeof upstream[field] === 'string') details[field] = upstream[field]
+  }
+  const failed = upstream.failed_generation
+  if (failed && typeof failed === 'object' && !Array.isArray(failed)) {
+    const allowed = {}
+    for (const field of ['reason', 'tool_call_id']) {
+      if (typeof failed[field] === 'string') allowed[field] = failed[field]
+    }
+    if (Object.keys(allowed).length > 0) details.failed_generation = allowed
+  }
+  return Object.keys(details).length > 0 ? details : null
+}
 
 const textResult = (text, isError = false) => ({
   ...(isError ? { isError: true } : {}),
@@ -52,6 +113,19 @@ function providerError(error) {
         error.status === 401 || error.status === 403
           ? 'Groq authentication failed. Check GROQ_API_KEY.'
           : `Groq rejected the request (HTTP ${error.status}).`,
+      ...(error.status === 429 && error.rateLimit
+        ? { details: `rate-limit ${JSON.stringify(error.rateLimit)}` }
+        : {}),
+      ...(error.status === 400
+        ? {
+            details: [
+              `request ${error.requestPhase} tools=${error.toolCount} bytes=${error.requestBytes}`,
+              ...(error.badRequest
+                ? [`bad-request ${JSON.stringify(error.badRequest)}`]
+                : []),
+            ].join(' '),
+          }
+        : {}),
     }
   }
   return {
@@ -68,28 +142,55 @@ async function requestCompletion({
   effort,
   messages,
   tools,
+  requestPhase,
   signal,
 }) {
+  const requestBody = JSON.stringify({
+    model,
+    ...(effort ? { reasoning_effort: effort } : {}),
+    messages,
+    tools,
+    tool_choice: 'auto',
+    parallel_tool_calls: false,
+  })
+  const requestMeta = {
+    requestPhase,
+    toolCount: tools.length,
+    requestBytes: Buffer.byteLength(requestBody, 'utf8'),
+  }
+  console.log(
+    `[jarvis] groq request: ${requestMeta.requestPhase} ` +
+      `tools=${requestMeta.toolCount} bytes=${requestMeta.requestBytes}`,
+  )
   const response = await fetchImpl(GROQ_CHAT_COMPLETIONS_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model,
-      ...(effort ? { reasoning_effort: effort } : {}),
-      messages,
-      tools,
-      tool_choice: 'auto',
-      parallel_tool_calls: false,
-    }),
+    body: requestBody,
     signal,
   })
 
   if (!response.ok) {
     const error = new Error(`Groq request failed with HTTP ${response.status}`)
     error.status = response.status
+    Object.assign(error, requestMeta)
+    if (response.status === 400) {
+      try {
+        error.badRequest = badRequestDetails(await response.json())
+      } catch {
+        // A non-JSON or unreadable body is intentionally not logged.
+      }
+    }
+    if (response.status === 429) {
+      const rateLimit = {}
+      for (const name of RATE_LIMIT_HEADERS) {
+        const value = response.headers?.get?.(name)
+        if (value != null && value !== '') rateLimit[name] = value
+      }
+      if (Object.keys(rateLimit).length > 0) error.rateLimit = rateLimit
+    }
     throw error
   }
 
@@ -144,7 +245,14 @@ export function createGroqAgentSession({
       ownerByTool.set(tool.name, server.name)
     }
   }
-  const tools = localToolServers.flatMap(exportFunctionTools)
+  const serverByName = new Map(localToolServers.map((server) => [server.name, server]))
+  const exportedByGroup = new Map()
+  for (const [group, serverName] of Object.entries(CAPABILITY_SERVERS)) {
+    const server = serverByName.get(serverName)
+    if (server) exportedByGroup.set(group, exportFunctionTools(server))
+  }
+  const usesCapabilityLoader = exportedByGroup.size > 0
+  const legacyTools = localToolServers.flatMap(exportFunctionTools)
   let controller = null
   let closed = false
 
@@ -168,6 +276,9 @@ export function createGroqAgentSession({
         const turnStart = messages.length
         let turnSucceeded = false
         let hasCommittedToolResult = false
+        const loadedGroups = new Set()
+        let turnTools = usesCapabilityLoader ? [TOOL_LOADER] : legacyTools
+        let requestPhase = usesCapabilityLoader ? 'initial-loader' : 'initial-tools'
         messages.push({ role: 'user', content: userText(input) })
 
         try {
@@ -179,7 +290,8 @@ export function createGroqAgentSession({
               model,
               effort,
               messages,
-              tools,
+              tools: turnTools,
+              requestPhase,
               signal: controller.signal,
             })
             const toolCalls = Array.isArray(assistant.tool_calls)
@@ -207,8 +319,59 @@ export function createGroqAgentSession({
             for (const call of toolCalls) {
               const id = call?.id
               const name = call?.function?.name
+              if (name === TOOL_LOADER_NAME) {
+                let args
+                try {
+                  args = JSON.parse(call?.function?.arguments ?? '{}')
+                } catch {
+                  args = null
+                }
+                const requested = Array.isArray(args?.groups)
+                  ? [...new Set(args.groups)]
+                  : []
+                const invalid = requested.filter(
+                  (group) => !exportedByGroup.has(group),
+                )
+                const proposed = new Set([...loadedGroups, ...requested])
+                const proposedTools = [
+                  TOOL_LOADER,
+                  ...[...proposed].flatMap(
+                    (group) => exportedByGroup.get(group) ?? [],
+                  ),
+                ]
+                const tooLarge = byteLength(proposedTools) > MAX_LOADED_TOOL_BYTES
+                const accepted =
+                  requested.length > 0 && invalid.length === 0 && !tooLarge
+                const content = accepted
+                  ? `Loaded JARVIS capabilities for this turn: ${requested.join(', ')}.`
+                  : invalid.length
+                    ? `Unknown or unavailable JARVIS capability: ${invalid.join(', ')}.`
+                    : tooLarge
+                      ? `Capability request rejected: the combined tool schemas exceed the ${MAX_LOADED_TOOL_BYTES}-byte safe limit. Load a smaller set.`
+                      : 'Capability request rejected: groups must be a non-empty array.'
+                if (accepted) {
+                  for (const group of requested) loadedGroups.add(group)
+                  turnTools = proposedTools
+                  requestPhase = 'loaded-tools'
+                }
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: id,
+                  name,
+                  content: JSON.stringify({ ok: accepted, content }),
+                })
+                committedToolCalls += 1
+                continue
+              }
               const serverName = ownerByTool.get(name)
-              const eventName = serverName
+              const loadedServerNames = new Set(
+                [...loadedGroups].map((group) => CAPABILITY_SERVERS[group]),
+              )
+              const activeServerName =
+                !usesCapabilityLoader || loadedServerNames.has(serverName)
+                ? serverName
+                : null
+              const eventName = activeServerName
                 ? `mcp__${serverName}__${name}`
                 : name
               yield { type: 'tool_start', id, name: eventName }
@@ -220,12 +383,12 @@ export function createGroqAgentSession({
                 args = null
               }
               const result =
-                args && serverName
-                  ? await executor.execute(serverName, name, args)
+                args && activeServerName
+                  ? await executor.execute(activeServerName, name, args)
                   : textResult(
-                      serverName
+                      activeServerName
                         ? `Invalid JSON arguments for local tool: ${name}`
-                        : `Unknown local tool: ${String(name)}`,
+                        : `Unknown local tool (or capability not loaded): ${String(name)}`,
                       true,
                     )
 
@@ -252,6 +415,7 @@ export function createGroqAgentSession({
               })
               committedToolCalls += 1
               hasCommittedToolResult = true
+              requestPhase = 'post-tool-result'
             }
             if (completed) break
           }

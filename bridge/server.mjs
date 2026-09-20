@@ -17,6 +17,7 @@
 
 import { WebSocketServer } from 'ws'
 import { createAgentSession } from './agent/agent-router.mjs'
+import { systemPromptForProvider } from './agent/system-prompts.mjs'
 import { displayServer } from './panels.mjs'
 import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
@@ -1217,7 +1218,7 @@ wss.on('connection', (socket) => {
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
       // of input tokens on every turn. Replacing it makes the persona stick,
       // keeps answers short enough to speak, and cuts cost per turn.
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: systemPromptForProvider(PROVIDER, SYSTEM_PROMPT),
       // Run from the home directory so project-scoped MCP servers don't shadow
       // the global ones, and so file tools have a sane root.
       cwd: homedir(),
