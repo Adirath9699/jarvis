@@ -1,5 +1,5 @@
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
+import { defineLocalTool, defineLocalToolServer } from './tools/registry.mjs'
 
 /**
  * JARVIS's eyes.
@@ -71,7 +71,10 @@ than listing them. The user knows what their own hands look like.`
  *   Sends a request to the browser and resolves with its reply.
  */
 export function visionServer(ask) {
-  return createSdkMcpServer({
+  const readTool = (name, description, inputSchema, execute) =>
+    defineLocalTool({ name, description, inputSchema, execute, access: 'read' })
+
+  return defineLocalToolServer({
     name: 'jarvis_eyes',
     version: '1.0.0',
     instructions:
@@ -80,7 +83,7 @@ export function visionServer(ask) {
     // Behind tool search, "look at me" would find nothing and become an apology.
     alwaysLoad: true,
     tools: [
-      tool(
+      readTool(
         'look',
         DESCRIPTION,
         {
@@ -138,7 +141,7 @@ export function visionServer(ask) {
           }
         },
       ),
-      tool(
+      readTool(
         'watch',
         WATCH_DESCRIPTION,
         {
