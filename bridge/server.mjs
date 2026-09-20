@@ -16,7 +16,7 @@
  */
 
 import { WebSocketServer } from 'ws'
-import { createClaudeAgentSession } from './agent/claude-agent.mjs'
+import { createAgentSession } from './agent/agent-router.mjs'
 import { displayServer } from './panels.mjs'
 import { uiServer } from './ui.mjs'
 import { chromeAvailable, chromeServer } from './chrome.mjs'
@@ -97,6 +97,9 @@ function originAllowed(origin) {
  * without it, and turn it on once you trust what you're demoing.
  */
 const ALLOW_WRITES = process.env.JARVIS_ALLOW_WRITES === '1'
+
+/** The agent provider selected for the bridge. Only Claude exists for now. */
+const PROVIDER = process.env.JARVIS_PROVIDER?.trim().toLowerCase() || 'claude'
 
 /**
  * The orchestrator model. Override with JARVIS_MODEL to trade quality for pace
@@ -1004,7 +1007,7 @@ console.log(`[jarvis] bridge listening on ws://localhost:${PORT}`)
 console.log(
   `[jarvis] speech ${elevenKey() ? 'via ElevenLabs (key from MCP config)' : 'using browser fallback voice'}`,
 )
-console.log(`[jarvis] model ${MODEL} · effort ${EFFORT}`)
+console.log(`[jarvis] provider ${PROVIDER} · model ${MODEL} · effort ${EFFORT}`)
 console.log(
   `[jarvis] writes ${ALLOW_WRITES ? 'ENABLED' : 'disabled'}` +
     (ALLOW_WRITES ? '' : ' — set JARVIS_ALLOW_WRITES=1 to permit shell/file/device actions'),
@@ -1190,9 +1193,8 @@ wss.on('connection', (socket) => {
     if (!failed) sendTurn({ type: 'tool', name })
   }
 
-  // Claude remains the only provider. This is the first boundary for choosing
-  // other providers in a later, explicitly scoped multi-provider refactor.
-  const session = createClaudeAgentSession({
+  const session = createAgentSession({
+    provider: PROVIDER,
     prompt: userMessages(),
       // Everything Claude Code has configured, plus the HUD as an in-process
       // server. The HUD's handler closes over this socket, so a `display` call
