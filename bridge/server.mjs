@@ -1206,6 +1206,9 @@ wss.on('connection', (socket) => {
         // The user's own Chrome, over the extension's native-host socket.
         chromeServer({ allowWrites: ALLOW_WRITES }),
       ],
+      // Local descriptors retain their existing surface-level write gate, and
+      // the shared executor enforces the same policy again before every call.
+      allowWrites: ALLOW_WRITES,
       // A plain system prompt, not the claude_code preset. The preset is
       // tuned for a coding agent — verbose, file-oriented, and a large chunk
       // of input tokens on every turn. Replacing it makes the persona stick,

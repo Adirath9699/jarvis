@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { createClaudeToolServer } from './claude-tools.mjs'
+import { createLocalToolExecutor } from '../tools/registry.mjs'
 
 const RESULT_FAILURES = {
   error_during_execution: 'The turn failed part way through.',
@@ -128,6 +129,7 @@ export function createClaudeAgentSession({
   systemPrompt,
   mcpServers,
   localToolServers = [],
+  allowWrites = false,
   cwd,
   model,
   effort,
@@ -137,6 +139,9 @@ export function createClaudeAgentSession({
   includePartialMessages,
   canUseTool,
 }) {
+  const localToolExecutor = createLocalToolExecutor(localToolServers, {
+    allowWrites,
+  })
   const session = query({
     prompt,
     options: {
@@ -146,7 +151,7 @@ export function createClaudeAgentSession({
         ...Object.fromEntries(
           localToolServers.map((server) => [
             server.name,
-            createClaudeToolServer(server),
+            createClaudeToolServer(server, localToolExecutor),
           ]),
         ),
       },

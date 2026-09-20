@@ -1,7 +1,7 @@
 import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 
 /** Translate one neutral local tool server into a Claude SDK MCP server. */
-export function createClaudeToolServer(server) {
+export function createClaudeToolServer(server, executor) {
   return createSdkMcpServer({
     name: server.name,
     version: server.version,
@@ -12,7 +12,7 @@ export function createClaudeToolServer(server) {
         definition.name,
         definition.description,
         definition.inputSchema,
-        definition.execute,
+        (args) => executor.execute(server.name, definition.name, args),
       ),
     ),
   })
